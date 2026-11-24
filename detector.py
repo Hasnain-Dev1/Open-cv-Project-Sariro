@@ -3,15 +3,34 @@ import cv2
 import numpy as np
 
 KNOWN_DIR = Path("known_faces")
-FACE_CASCADE = cv2.CascadeClassifier(
-    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-)
+
+
+def _load_face_cascade() -> cv2.CascadeClassifier:
+    """Load the frontal face Haar cascade safely across OpenCV builds."""
+    filename = "haarcascade_frontalface_default.xml"
+    cascade_dir = getattr(getattr(cv2, "data", None), "haarcascades", None)
+
+    candidates = []
+    if cascade_dir:
+        candidates.append(Path(cascade_dir) / filename)
+    candidates.append(Path(cv2.__file__).resolve().parent / "data" / filename)
+
+    for path in candidates:
+        if path.exists():
+            clf = cv2.CascadeClassifier(str(path))
+            if not clf.empty():
+                return clf
+
+    raise FileNotFoundError(f"Could not load {filename} from OpenCV data paths.")
+
+
+FACE_CASCADE = _load_face_cascade()
 
 
 def _match_histogram(
     face_gray: np.ndarray, known_hists: list[tuple[str, np.ndarray]]
 ) -> tuple[str | None, float]:
-    """Compare face brightness histogram against saved reference faces."""
+    """Compare a grayscale face crop against saved reference histograms."""
     resized = cv2.resize(face_gray, (100, 100))
     hist = cv2.calcHist([resized], [0], None, [64], [0, 256])
     cv2.normalize(hist, hist)
@@ -27,7 +46,7 @@ def _match_histogram(
 
 
 def load_known_profiles(known_dir: Path = KNOWN_DIR) -> list[tuple[str, np.ndarray]]:
-    """Load reference images from known_faces/ and build histograms."""
+    """Load reference images from known_faces/ and build normalized histograms."""
     known_dir.mkdir(exist_ok=True)
     profiles: list[tuple[str, np.ndarray]] = []
 
@@ -37,6 +56,7 @@ def load_known_profiles(known_dir: Path = KNOWN_DIR) -> list[tuple[str, np.ndarr
         img = cv2.imread(str(img_path))
         if img is None:
             continue
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = FACE_CASCADE.detectMultiScale(
             gray, scaleFactor=1.2, minNeighbors=5, minSize=(40, 40)
@@ -92,13 +112,13 @@ def analyze_hosted_photo(
         face_gray = gray[y:y2, x:x2]
 
         label = "Unknown Face"
-        color = (0, 165, 255)  # Orange
+        color = (0, 165, 255)  # Orange in BGR
 
         if face_gray.size > 0 and known_profiles:
             name, score = _match_histogram(face_gray, known_profiles)
             if name and score >= match_threshold:
                 label = f"Good Guy ({name})"
-                color = (0, 180, 0)  # Green
+                color = (0, 180, 0)  # Green in BGR
                 if overall_status != "COVERED":
                     overall_status = "GOOD_GUY"
 
